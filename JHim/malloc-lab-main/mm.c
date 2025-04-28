@@ -699,7 +699,7 @@
 
 
 
-//implicit free list
+//buggi buggi bang bang 'buddy buddy' boom boom
 /*
  * mm-naive.c - The fastest, least memory-efficient malloc package.
  * 
@@ -768,8 +768,6 @@ team_t team = {
 #define GET(p) (*(unsigned int *)(p))
 #define PUT(p, val) (*(unsigned int *)(p) = (val)) 
 
-//중간 세이브브
-
 
 //주소 p에 저장된 값을 읽고, 이를 비트마스킹 = 사이즈 확보보
 //주소 p의 1비트 자리 값을 읽고, alloc 여부 확인
@@ -798,7 +796,7 @@ team_t team = {
 
 
 //대 버디 시스템 매크로
-
+#define BL_LIMIT 20
 
 
 
@@ -809,8 +807,8 @@ static void place(void *bp, size_t asize);
 
 
 static char *heap_listp;
-
-
+static void *buddy_list[BL_LIMIT];
+static long Mindex;
 
 
 /* 
@@ -820,6 +818,14 @@ int mm_init(void)
 {
     if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1)
         return -1;
+    
+
+    for(int id = 0; id<BL_LIMIT; id++)
+    {
+        buddy_list[id] = NULL;
+    }
+            
+    
     PUT(heap_listp, 0); //Alignment Padding
     PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1)); //Prologue Header
     PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1)); //Prologu footer
@@ -829,6 +835,7 @@ int mm_init(void)
     heap_listp += (2 * WSIZE);
     if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
         return -1;
+    Mindex = 10;
     return 0;
 }
 
@@ -860,36 +867,56 @@ static void *extend_heap(size_t words){
 
 
 static void *coalesce(void *bp){
-    size_t prev_alloc = GETALLOC(FTRP(PREV_BLKR(bp)));
-    size_t next_alloc = GETALLOC(HDRP(NEXT_BLKR(bp)));
     size_t size = GETSIZE(HDRP(bp));
+
+    //29가 나온 근거 : unsigned int * bit수 - 1 -3(한 블록당 8바이트니까, 최소 크기 세팅)
+    //__builtin_clz 앞에 있는 공백 비트 개수
+    //ex : 8 -> 29 - (0000 0000 0000 0000 00000 0000 0000 0) 100 -> 31- 29 = 3
+    //__builtin_ctz 뒤에 있는 공백 비트 개수수
+    size_t checker = __builtin_ctz(size) - 3;
+ 
+    void *buddy_bp = (void *) ((unsigned int)(bp) ^ size);
     
-    if(prev_alloc && next_alloc){
+    // //최초 시전 시에만 탈출되도록 설계한 코드인데 아마 없어도 될듯?
+    // if (buddy_bp > mem_sbrk(0)){
+    //     PUT(bp, *(buddy_list + checker)); //free 블록의 bp(푸터)에 다음 free 값 저장
+    //     buddy_list[checker] =  bp; 
+    //     return bp;
+    // }
+
+
+    size_t buddy_alloc = GETALLOC(HDRP(buddy_bp));
+
+    if(buddy_alloc){
+        PUT(bp, buddy_list[checker]); //free 블록의 bp(푸터)에 다음 free 값 저장
+        buddy_list[checker] =  bp; 
         return bp;
     }
 
-    else if(prev_alloc && !next_alloc){
-        size += GETSIZE(HDRP(NEXT_BLKR(bp)));
-        PUT(HDRP(bp), PACK(size, 0));
-
-        //헤더값이 최신화 됐으니, 블록 사이즈가 이미 증가된 상태 = FTRP로 점프 뛸 떄 최신화 된 값으로 점프
-        PUT(FTRP(bp), PACK(size, 0));
-    }
-
-    else if(!prev_alloc && next_alloc){
-        size += GETSIZE(HDRP(PREV_BLKR(bp)));
-        PUT(FTRP(bp), PACK(size,0));
-        PUT(HDRP(PREV_BLKR(bp)),PACK(size,0));
-        bp = PREV_BLKR(bp);
-    }
-    
     else{
-        size += GETSIZE(HDRP(PREV_BLKR(bp))) + GETSIZE(HDRP(NEXT_BLKR(bp)));
+        
+        void *CHCK_bp = buddy_list[checker];
+        if(CHCK_bp != buddy_bp){
 
-        PUT(FTRP(NEXT_BLKR(bp)), PACK(size,0));
-        PUT(HDRP(PREV_BLKR(bp)), PACK(size,0));
-        bp = PREV_BLKR(bp);
-    }
+            while (GET(CHCK_bp) != buddy_bp){
+                CHCK_bp = GET(CHCK_bp);
+            }
+
+            PUT(CHCK_bp, GET(buddy_bp));
+        }
+
+        else{
+            buddy_list[checker] = GET(buddy_bp);
+        }
+            
+        void *new_bp = (void *)((unsigned int)bp & (~size));
+        PUT(HDRP(new_bp), PACK(GETSIZE(HDRP(bp)) * 2,0)); 
+        coalesce(new_bp);
+        }
+        
+
+
+    
 
     return bp;
 }
@@ -907,31 +934,29 @@ void *mm_malloc(size_t size)
 {
     size_t asize;
     size_t extendsize;
-    char *bp;
+    void *bp;
 
-    if(size == 0) 
+    if (size == 0) 
         return NULL;
 
-
-    if(size <= DSIZE)
-        asize = 2*DSIZE;
+    if (size <= WSIZE)
+        asize = DSIZE;
     else
-    asize = ALIGN(size + DSIZE);
+        asize = ALIGN(size + DSIZE);
 
-
-    //find fit 으로 맞는 블록을 찾았을 때
-    if((bp = find_fit(asize)) != NULL){
-        place(bp,asize);
+    if ((bp = find_fit(asize)) != NULL) {
+        place(bp, asize);
         return bp;
     }
 
-
-    //못 찾았을 때
     extendsize = MAX(asize, CHUNKSIZE);
-    if((bp = extend_heap(extendsize/WSIZE)) == NULL)   
+    if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
         return NULL;
-    place(bp,asize);
+
+    place(bp, asize);
     return bp;
+
+
 
     
     //원래 코드 펼치기기
@@ -947,35 +972,58 @@ void *mm_malloc(size_t size)
 
 
 
-static void *find_fit(size_t asize){
-    char *bp;
-
-    //mem_heap_low 지점부터 시작해서, bp 헤더에서 뽑은 사이즈가 0보다 큰 동안(에필로그엔 0이 저장되어 있기에, 만나면 종료)
-    for (bp = heap_listp; GETSIZE(HDRP(bp)) > 0; bp = NEXT_BLKR(bp)){
-        if (!GETALLOC(HDRP(bp)) && GETSIZE(HDRP(bp)) >= asize)
-            return bp;
+static void *find_fit(size_t asize) {
+    for (size_t checker = __builtin_ctz(asize) - 3; checker < Mindex; checker++) {
+        if (buddy_list[checker] != NULL) {
+            return buddy_list[checker];
+        }
     }
     return NULL;
 }
 
 
-static void place(void *bp, size_t asize){
-    size_t checker = GETSIZE(HDRP(bp));
 
-    // 1블럭 이상의 free 블록이 나올 수 있는지 체크(헤더 4바, 푸터 4바, 본블럭 8바)
-    if((checker-asize) >= (2*DSIZE)){
+static void place(void *bp, size_t asize){
+    size_t asize_bts = __builtin_ctz(asize);
+    size_t checker = __builtin_ctz(GETSIZE(HDRP(bp)));
+    size_t BS = (1<<checker);
+
+    buddy_list[checker] = GET(bp);
+    while (checker != asize_bts){        
+        checker--;
+        BS = BS >> 1;
+
+        void *new_buddy = (void *) ((unsigned) bp + BS);
+        PUT(HDRP(new_buddy), PACK(BS,0));
+        PUT(new_buddy, buddy_list[checker]);
+        buddy_list[checker] = new_buddy;
         
-        PUT(HDRP(bp), PACK(asize, 1));
-        PUT(FTRP(bp), PACK(asize, 1));
-        bp = NEXT_BLKR(bp);
-        PUT(HDRP(bp), PACK(checker-asize,0));
-        PUT(FTRP(bp), PACK(checker-asize,0));
+        
+        
     }
-    else{
-        PUT(HDRP(bp), PACK(checker, 1));
-        PUT(FTRP(bp), PACK(checker, 1));
-    }
+    PUT(HDRP(bp), PACK(asize, 1));
+
+
+// static void place(void *bp, size_t asize){
+//     size_t checker = GETSIZE(HDRP(bp));
+
+//     // 1블럭 이상의 free 블록이 나올 수 있는지 체크(헤더 4바, 푸터 4바, 본블럭 8바)
+//     if((checker-asize) >= (2*DSIZE)){
+        
+//         PUT(HDRP(bp), PACK(asize, 1));
+//         PUT(FTRP(bp), PACK(asize, 1));
+//         bp = NEXT_BLKR(bp);
+//         PUT(HDRP(bp), PACK(checker-asize,0));
+//         PUT(FTRP(bp), PACK(checker-asize,0));
+//     }
+//     else{
+//         PUT(HDRP(bp), PACK(checker, 1));
+//         PUT(FTRP(bp), PACK(checker, 1));
+//     }
     
+
+// }
+
 
 }
 
@@ -992,7 +1040,6 @@ void mm_free(void *ptr)
 {
     size_t size = GETSIZE(HDRP(ptr));
     PUT(HDRP(ptr), PACK(size, 0));
-    PUT(FTRP(ptr), PACK(size, 0));
     coalesce(ptr);
 }
 
