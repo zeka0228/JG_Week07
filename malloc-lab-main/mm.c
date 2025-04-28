@@ -5,10 +5,19 @@
 #include <string.h>
 #include "mm.h"
 #include "memlib.h"
-/* 팀 정보 */
+
 team_t team = {
-    "ateam", "Harry Bovik", "bovik@cs.cmu.edu", "", ""
-};
+    /* Team name */
+    "7team",
+    /* First member's full name */
+    "hyosikkk",
+    /* First member's email address */
+    "gytlr0785@gmail.com",
+    /* Second member's full name (leave blank if none) */
+    "",
+    /* Second member's email address (leave blank if none) */
+    ""};
+
 /* 매크로 상수 */
 #define WSIZE 8
 #define DSIZE 16
