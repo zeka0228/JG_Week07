@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#define _GNU_SOURCE
 #include <string.h>
 #include <assert.h>
 #include <float.h>
@@ -216,6 +217,11 @@ int main(int argc, char **argv)
 	else
 	    printf("Member 1 :%s:%s\n", team.name1, team.id1);
 
+	if (team.name2 == NULL || team.id2 == NULL) {
+        printf("ERROR. Team member 2 ID fields are not properly initialized.\n");
+        exit(1);
+    }
+	
 	if (((*team.name2 != '\0') && (*team.id2 == '\0')) ||
 	    ((*team.name2 == '\0') && (*team.id2 != '\0'))) { 
 	    printf("ERROR.  You must fill in all or none of the team member 2 ID fields!\n");
