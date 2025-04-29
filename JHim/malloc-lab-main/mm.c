@@ -797,6 +797,8 @@ team_t team = {
 
 //대 버디 시스템 매크로
 #define BL_LIMIT 20
+#define GET_PTR(p) (*(void **)(p))
+#define PUT_PTR(p, val) (*(void **)(p) = (val))
 
 
 
@@ -833,9 +835,12 @@ int mm_init(void)
     //에필로그는 사이즈는 0이나 실제 차지는 워드 => 해당 모순성으로 에필로그인지 판별함
     PUT(heap_listp + (3*WSIZE), PACK(0, 1));     //Epilogue header
     heap_listp += (2 * WSIZE);
-    if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
+
+
+
+
+    if (extend_heap(CHUNKSIZE/WSIZE) == NULL)
         return -1;
-    Mindex = 10;
     return 0;
 }
 
@@ -843,10 +848,16 @@ int mm_init(void)
 static void *extend_heap(size_t words){
 
     char *bp;
-    size_t size;
+    size_t size = words * WSIZE;
 
-    //8바이트 정렬, 홀수면 4바이트가 따로 논다는거니 워드 하나 더 붙여주기
-    size = (words % 2) ? (words +1) * WSIZE : words * WSIZE;
+    //ex) 4 -> 100, 4-1 -> 011, 011 | 001 = 011, 011 | 000 = 011, 011 + 1 = 100
+    size--;
+    size |= size >> 1;
+    size |= size >> 2;
+    size |= size >> 4;
+    size |= size >> 8;
+    size |= size >> 16;
+    size += 1;
 
     //mem_sbrk : 힙 size 증가 
     //확장 전 brk를 ord_brk로 따로 보관하고 리턴함, 즉 확장한 heap의 시작점을 리턴함
@@ -855,72 +866,120 @@ static void *extend_heap(size_t words){
 
     //해당 bp의 헤더 = bp - word = 이전 힙블록의 에필로그를 덮어씀 
     PUT(HDRP(bp), PACK(size,0));
-    PUT(FTRP(bp), PACK(size,0));
-
-    //새 에필로그 헤더 재생성
-    PUT(HDRP(NEXT_BLKR(bp)), PACK(0, 1));
 
 
-
-    return coalesce(bp);
-}
-
-
-static void *coalesce(void *bp){
-    size_t size = GETSIZE(HDRP(bp));
-
-    //29가 나온 근거 : unsigned int * bit수 - 1 -3(한 블록당 8바이트니까, 최소 크기 세팅)
-    //__builtin_clz 앞에 있는 공백 비트 개수
-    //ex : 8 -> 29 - (0000 0000 0000 0000 00000 0000 0000 0) 100 -> 31- 29 = 3
-    //__builtin_ctz 뒤에 있는 공백 비트 개수수
-    size_t checker = __builtin_ctz(size) - 3;
+    Mindex = __builtin_ctz(size)-3;
  
-    void *buddy_bp = (void *) ((unsigned int)(bp) ^ size);
+
+    bp = coalesce(bp);
     
-    // //최초 시전 시에만 탈출되도록 설계한 코드인데 아마 없어도 될듯?
-    // if (buddy_bp > mem_sbrk(0)){
-    //     PUT(bp, *(buddy_list + checker)); //free 블록의 bp(푸터)에 다음 free 값 저장
-    //     buddy_list[checker] =  bp; 
-    //     return bp;
-    // }
-
-
-    size_t buddy_alloc = GETALLOC(HDRP(buddy_bp));
-
-    if(buddy_alloc){
-        PUT(bp, buddy_list[checker]); //free 블록의 bp(푸터)에 다음 free 값 저장
-        buddy_list[checker] =  bp; 
-        return bp;
-    }
-
-    else{
-        
-        void *CHCK_bp = buddy_list[checker];
-        if(CHCK_bp != buddy_bp){
-
-            while (GET(CHCK_bp) != buddy_bp){
-                CHCK_bp = GET(CHCK_bp);
-            }
-
-            PUT(CHCK_bp, GET(buddy_bp));
-        }
-
-        else{
-            buddy_list[checker] = GET(buddy_bp);
-        }
-            
-        void *new_bp = (void *)((unsigned int)bp & (~size));
-        PUT(HDRP(new_bp), PACK(GETSIZE(HDRP(bp)) * 2,0)); 
-        coalesce(new_bp);
-        }
-        
-
-
     
-
     return bp;
 }
 
+
+// static void *coalesce(void *bp){
+//     size_t size = GETSIZE(HDRP(bp));
+
+//     //29가 나온 근거 : unsigned int * bit수 - 1 -3(한 블록당 8바이트니까, 최소 크기 세팅)
+//     //__builtin_clz 앞에 있는 공백 비트 개수
+//     //ex : 8 -> 29 - (0000 0000 0000 0000 00000 0000 0000 0) 100 -> 31- 29 = 3
+//     //__builtin_ctz 뒤에 있는 공백 비트 개수수
+//     size_t checker = __builtin_ctz(size) - 3;
+ 
+//     void *buddy_bp = (void *) ((((unsigned int)(bp) - (unsigned int) heap_listp) ^ size) + (unsigned int) heap_listp);
+    
+//     // //최초 시전 시에만 탈출되도록 설계한 코드인데 아마 없어도 될듯?
+//     // if (buddy_bp > mem_sbrk(0)){
+//     //     PUT(bp, *(buddy_list + checker)); //free 블록의 bp(푸터)에 다음 free 값 저장
+//     //     buddy_list[checker] =  bp; 
+//     //     return bp;
+//     // }
+
+//     if ((char *)buddy_bp >= (char *)mem_sbrk(0)) {
+//         PUT_PTR(bp, buddy_list[checker]);
+//         buddy_list[checker] = bp;
+//         return bp;
+//     }
+
+//     size_t buddy_alloc = GETALLOC(HDRP(buddy_bp));
+
+//     if(buddy_alloc){
+//         PUT_PTR(bp, buddy_list[checker]); //free 블록의 bp(푸터)에 다음 free 값 저장
+//         buddy_list[checker] =  bp; 
+//         return bp;
+//     }
+
+//     else{
+        
+//         if (buddy_list[checker] == buddy_bp) {
+//             buddy_list[checker] = GET_PTR(buddy_bp);
+//         } else {
+//             void *prev = buddy_list[checker];
+//             while (prev && GET_PTR(prev) != buddy_bp) {
+//                 prev = GET_PTR(prev);
+//             }
+//             if (prev)
+//                 PUT_PTR(prev, GET_PTR(buddy_bp));
+//         }
+
+//         bp = (bp < buddy_bp) ? bp : buddy_bp;
+//         PUT(HDRP(bp), PACK(size * 2, 0));
+//         return coalesce(bp);
+//         }
+        
+// }
+
+
+static void *coalesce(void *bp) {
+    size_t size = GETSIZE(HDRP(bp));
+    size_t checker = __builtin_ctz(size) - 3;
+
+    while (1) {
+        void *buddy_bp = (void *)((((unsigned int)bp - (unsigned int)heap_listp) ^ size) + (unsigned int)heap_listp);
+
+        // buddy가 heap 범위 안에 있는지 체크
+        if ((char *)buddy_bp < (char *)mem_heap_lo() || (char *)buddy_bp >= (char *)mem_heap_hi()) {
+            break;
+        }
+
+        // buddy의 header를 읽기 전에 확인
+        size_t buddy_size = GETSIZE(HDRP(buddy_bp));
+        size_t buddy_alloc = GETALLOC(HDRP(buddy_bp));
+
+        // buddy가 size가 같고 free여야 합칠 수 있다
+        if (buddy_alloc || buddy_size != size) {
+            break;
+        }
+
+        // free list에서 buddy 제거
+        if (buddy_list[checker] == buddy_bp) {
+            buddy_list[checker] = GET_PTR(buddy_bp);
+        } else {
+            void *prev = buddy_list[checker];
+            while (prev && GET_PTR(prev) != buddy_bp) {
+                prev = GET_PTR(prev);
+            }
+            if (prev) {
+                PUT_PTR(prev, GET_PTR(buddy_bp));
+            }
+        }
+
+        // 작은 주소를 기준으로 병합
+        bp = (bp < buddy_bp) ? bp : buddy_bp;
+
+        size *= 2;
+        checker++;
+
+        PUT(HDRP(bp), PACK(size, 0));
+    }
+
+    // 최종 병합된 블록을 free list에 넣는다
+    PUT_PTR(bp, buddy_list[checker]);
+    buddy_list[checker] = bp;
+
+    return bp;
+}
 
 
 
@@ -930,19 +989,26 @@ static void *coalesce(void *bp){
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
  */
-void *mm_malloc(size_t size)
+void *mm_malloc(size_t asize)
 {
-    size_t asize;
     size_t extendsize;
     void *bp;
 
-    if (size == 0) 
+    if (asize == 0) 
         return NULL;
 
-    if (size <= WSIZE)
+    if (asize <= WSIZE)
         asize = DSIZE;
-    else
-        asize = ALIGN(size + DSIZE);
+    else{
+        asize += WSIZE;
+        asize--;
+        asize |= asize >> 1;
+        asize |= asize >> 2;
+        asize |= asize >> 4;
+        asize |= asize >> 8;
+        asize |= asize >> 16;
+        asize += 1;
+    }
 
     if ((bp = find_fit(asize)) != NULL) {
         place(bp, asize);
@@ -972,37 +1038,61 @@ void *mm_malloc(size_t size)
 
 
 
+// static void *find_fit(size_t asize) {
+//     for (size_t checker = __builtin_ctz(asize) - 3; checker <= Mindex; checker++) {
+//         if (buddy_list[checker] != NULL) {
+//             // void *bp = buddy_list[checker];
+//             // buddy_list[checker] = GET_PTR(bp); // next free
+//             return buddy_list[checker];
+//         }
+//     }
+//     return NULL;
+// }
+
 static void *find_fit(size_t asize) {
-    for (size_t checker = __builtin_ctz(asize) - 3; checker < Mindex; checker++) {
-        if (buddy_list[checker] != NULL) {
-            return buddy_list[checker];
+    for (size_t checker = __builtin_ctz(asize) - 3; checker < BL_LIMIT; checker++) {
+        void *bp = buddy_list[checker];
+        while (bp) {
+            size_t block_size = GETSIZE(HDRP(bp));
+            size_t alloc = GETALLOC(HDRP(bp));
+            if (!alloc && block_size >= asize) {
+                return bp;
+            }
+            bp = GET_PTR(bp);
         }
     }
     return NULL;
 }
 
-
-
 static void place(void *bp, size_t asize){
-    size_t asize_bts = __builtin_ctz(asize);
-    size_t checker = __builtin_ctz(GETSIZE(HDRP(bp)));
-    size_t BS = (1<<checker);
+    size_t block_size = GETSIZE(HDRP(bp));
+    size_t bp_index = __builtin_ctz(block_size) - 3;
+    size_t target_index = __builtin_ctz(asize) - 3;
 
-    buddy_list[checker] = GET(bp);
-    while (checker != asize_bts){        
-        checker--;
-        BS = BS >> 1;
-
-        void *new_buddy = (void *) ((unsigned) bp + BS);
-        PUT(HDRP(new_buddy), PACK(BS,0));
-        PUT(new_buddy, buddy_list[checker]);
-        buddy_list[checker] = new_buddy;
-        
-        
-        
+    // free list에서 bp 제거
+    if (buddy_list[bp_index] == bp) {
+        buddy_list[bp_index] = GET_PTR(bp);
+    } else {
+        void *prev = buddy_list[bp_index];
+        while (prev && GET_PTR(prev) != bp) {
+            prev = GET_PTR(prev);
+        }
+        if (prev)
+            PUT_PTR(prev, GET_PTR(bp));
     }
-    PUT(HDRP(bp), PACK(asize, 1));
 
+    while (bp_index > target_index) {
+        bp_index--;
+        block_size >>= 1;
+
+        void *new_buddy = (char *)bp + block_size;
+        PUT(HDRP(new_buddy), PACK(block_size, 0));
+        PUT_PTR(new_buddy, buddy_list[bp_index]);
+        buddy_list[bp_index] = new_buddy;
+    }
+
+    PUT(HDRP(bp), PACK(block_size, 1));
+    PUT_PTR(bp, NULL);
 
 // static void place(void *bp, size_t asize){
 //     size_t checker = GETSIZE(HDRP(bp));
