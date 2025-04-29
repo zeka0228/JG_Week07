@@ -746,7 +746,7 @@ team_t team = {
 #define DSIZE 8
 
 //사이즈 정의 CHUNKSIZE = 할당 힙의 최소 크기(4KB)
-#define CHUNKSIZE (1<<12)
+// #define CHUNKSIZE (1<<12)
 
 //주어진 사이즈를 8의 배수로 올림 
 //ex) 13을 받았으면 ALIGNMENT(=8) 13+(8-1) = 20, 10100 & ~(00111)= 10100 & 11000 = 10000 = 16  
@@ -796,7 +796,7 @@ team_t team = {
 
 
 //대 버디 시스템 매크로
-#define BL_LIMIT 20
+#define BL_LIMIT 24
 #define GET_PTR(p) (*(void **)(p))
 #define PUT_PTR(p, val) (*(void **)(p) = (val))
 
@@ -811,7 +811,7 @@ static void place(void *bp, size_t asize);
 static char *heap_listp;
 static void *buddy_list[BL_LIMIT];
 static long Mindex;
-
+static int CHUNKSIZE;
 
 /* 
  * mm_init - initialize the malloc package.
@@ -834,10 +834,9 @@ int mm_init(void)
 
     //에필로그는 사이즈는 0이나 실제 차지는 워드 => 해당 모순성으로 에필로그인지 판별함
     PUT(heap_listp + (3*WSIZE), PACK(0, 1));     //Epilogue header
-    heap_listp += (2 * WSIZE);
+    
 
-
-
+    CHUNKSIZE = 1<<16;
 
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL)
         return -1;
@@ -858,7 +857,6 @@ static void *extend_heap(size_t words){
     size |= size >> 8;
     size |= size >> 16;
     size += 1;
-
     //mem_sbrk : 힙 size 증가 
     //확장 전 brk를 ord_brk로 따로 보관하고 리턴함, 즉 확장한 heap의 시작점을 리턴함
     if((long)(bp = mem_sbrk(size)) == -1) 
@@ -991,7 +989,6 @@ static void *coalesce(void *bp) {
  */
 void *mm_malloc(size_t asize)
 {
-    size_t extendsize;
     void *bp;
 
     if (asize == 0) 
@@ -1015,12 +1012,24 @@ void *mm_malloc(size_t asize)
         return bp;
     }
 
-    extendsize = MAX(asize, CHUNKSIZE);
-    if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
-        return NULL;
-
-    place(bp, asize);
-    return bp;
+    if(asize > CHUNKSIZE){
+        for(int Q = __builtin_ctz(asize) - __builtin_ctz(CHUNKSIZE); Q <= __builtin_ctz(asize); Q++){
+            if((bp = extend_heap(CHUNKSIZE / WSIZE)) == NULL)
+                return NULL;
+            CHUNKSIZE <<= 1;
+        }
+        place(bp,asize);
+        return bp;
+    }
+    
+    else{
+        if((bp = extend_heap(CHUNKSIZE / WSIZE)) == NULL)
+            return NULL;
+        CHUNKSIZE <<= 1;
+        place(bp, asize);
+        return bp;
+    }
+    
 
 
 
@@ -1038,31 +1047,31 @@ void *mm_malloc(size_t asize)
 
 
 
-// static void *find_fit(size_t asize) {
-//     for (size_t checker = __builtin_ctz(asize) - 3; checker <= Mindex; checker++) {
-//         if (buddy_list[checker] != NULL) {
-//             // void *bp = buddy_list[checker];
-//             // buddy_list[checker] = GET_PTR(bp); // next free
-//             return buddy_list[checker];
-//         }
-//     }
-//     return NULL;
-// }
-
 static void *find_fit(size_t asize) {
-    for (size_t checker = __builtin_ctz(asize) - 3; checker < BL_LIMIT; checker++) {
-        void *bp = buddy_list[checker];
-        while (bp) {
-            size_t block_size = GETSIZE(HDRP(bp));
-            size_t alloc = GETALLOC(HDRP(bp));
-            if (!alloc && block_size >= asize) {
-                return bp;
-            }
-            bp = GET_PTR(bp);
+    for (size_t checker = __builtin_ctz(asize) - 3; checker <= Mindex; checker++) {
+        if (buddy_list[checker] != NULL) {
+            // void *bp = buddy_list[checker];
+            // buddy_list[checker] = GET_PTR(bp); // next free
+            return buddy_list[checker];
         }
     }
     return NULL;
 }
+
+// static void *find_fit(size_t asize) {
+//     for (size_t checker = __builtin_ctz(asize) - 3; checker < BL_LIMIT; checker++) {
+//         void *bp = buddy_list[checker];
+//         while (bp) {
+//             size_t block_size = GETSIZE(HDRP(bp));
+//             size_t alloc = GETALLOC(HDRP(bp));
+//             if (!alloc && block_size >= asize) {
+//                 return bp;
+//             }
+//             bp = GET_PTR(bp);
+//         }
+//     }
+//     return NULL;
+// }
 
 static void place(void *bp, size_t asize){
     size_t block_size = GETSIZE(HDRP(bp));
