@@ -1,4 +1,4 @@
-//segregate
+//buggi buggi bang bang 'buddy buddy' boom boom
 /*
  * mm-naive.c - The fastest, least memory-efficient malloc package.
  * 
@@ -45,7 +45,7 @@ team_t team = {
 #define DSIZE 8
 
 //사이즈 정의 CHUNKSIZE = 할당 힙의 최소 크기(4KB)
-#define CHUNKSIZE (1<<12)
+// #define CHUNKSIZE (1<<12)
 
 //주어진 사이즈를 8의 배수로 올림 
 //ex) 13을 받았으면 ALIGNMENT(=8) 13+(8-1) = 20, 10100 & ~(00111)= 10100 & 11000 = 10000 = 16  
@@ -66,13 +66,6 @@ team_t team = {
 //PUT = 주소 p에 val의 값을 넣겠다 이때 주소 p = 헤더 / 푸터
 #define GET(p) (*(unsigned int *)(p))
 #define PUT(p, val) (*(unsigned int *)(p) = (val)) 
-
-
-
-#define GET_PTR(p) (*(void **)(p))
-#define PUT_PTR(p, val) (*(void **)(p) = (val))
-
-//중간 세이브브
 
 
 //주소 p에 저장된 값을 읽고, 이를 비트마스킹 = 사이즈 확보보
@@ -101,41 +94,51 @@ team_t team = {
 
 
 
+//대 버디 시스템 매크로
+#define BL_LIMIT 24
+#define GET_PTR(p) (*(void **)(p))
+#define PUT_PTR(p, val) (*(void **)(p) = (val))
+
+
+
 static void *coalesce(void *bp);
 static void *extend_heap(size_t words);
 static void *find_fit(size_t asize);
 static void place(void *bp, size_t asize);
-static int find_IDX(size_t size);
-static void UL(char *bp, char *SP);
-static void AL(char *bp);
+
+
 static char *heap_listp;
-
-
-
+static void *buddy_list[BL_LIMIT];
+static long Mindex;
+static int CHUNKSIZE;
 
 /* 
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
 {
-    if ((heap_listp = mem_sbrk(24*WSIZE)) == (void *)-1)
+    if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1)
         return -1;
-    PUT(heap_listp, 0); //Alignment Padding
-    PUT(heap_listp + (1*WSIZE), PACK(11 * DSIZE, 1)); //Prologue Header
+    
 
-    //2~21WSIZE까진 Linked List
-    for(int i = 2; i<=21; i++){
-        PUT_PTR(heap_listp + (i*WSIZE), NULL);
+    for(int id = 0; id<BL_LIMIT; id++)
+    {
+        buddy_list[id] =NULL; 
     }
-
-    PUT(heap_listp + (22*WSIZE), PACK(11 * DSIZE, 1)); //Prologu footer
+            
+    
+    PUT(heap_listp, 0); //Alignment Padding
+    PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1)); //Prologue Header
+    PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1)); //Prologu footer
 
     //에필로그는 사이즈는 0이나 실제 차지는 워드 => 해당 모순성으로 에필로그인지 판별함
-    PUT(heap_listp + (23*WSIZE), PACK(0, 1));     //Epilogue header
-    heap_listp += WSIZE;
-    if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
-        return -1;
+    PUT(heap_listp + (3*WSIZE), PACK(0, 1));     //Epilogue header
+    
 
+    CHUNKSIZE = 1<<16;
+
+    if (extend_heap(CHUNKSIZE/WSIZE) == NULL)
+        return -1;
     return 0;
 }
 
@@ -143,16 +146,16 @@ int mm_init(void)
 static void *extend_heap(size_t words){
 
     char *bp;
-    size_t size;
+    size_t size = words * WSIZE;
 
-    
-    
-    //8바이트 정렬, 홀수면 4바이트가 따로 논다는거니 워드 하나 더 붙여주기
-    size = (words % 2) ? (words +1) * WSIZE : words * WSIZE;
-    
-    if (size <= 2 * DSIZE)
-        size = 2 * DSIZE;
-
+    //ex) 4 -> 100, 4-1 -> 011, 011 | 001 = 011, 011 | 000 = 011, 011 + 1 = 100
+    size--;
+    size |= size >> 1;
+    size |= size >> 2;
+    size |= size >> 4;
+    size |= size >> 8;
+    size |= size >> 16;
+    size += 1;
     //mem_sbrk : 힙 size 증가 
     //확장 전 brk를 ord_brk로 따로 보관하고 리턴함, 즉 확장한 heap의 시작점을 리턴함
     if((long)(bp = mem_sbrk(size)) == -1) 
@@ -160,82 +163,104 @@ static void *extend_heap(size_t words){
 
     //해당 bp의 헤더 = bp - word = 이전 힙블록의 에필로그를 덮어씀 
     PUT(HDRP(bp), PACK(size,0));
-    PUT(FTRP(bp), PACK(size,0));
 
 
-
-    //새 에필로그 헤더 재생성
-    PUT(HDRP(NEXT_BLKR(bp)), PACK(0, 1));
-
-    return coalesce(bp);
-
-
-}
-
-
-static void *coalesce(void *bp){
-    size_t prev_alloc = GETALLOC(FTRP(PREV_BLKR(bp)));
-    size_t next_alloc = GETALLOC(HDRP(NEXT_BLKR(bp)));
-    size_t size = GETSIZE(HDRP(bp));
-    
-    
-
-    if(prev_alloc && next_alloc){
-        AL(bp);
+    Mindex = __builtin_ctz(size)-3;
  
-        return bp;
-    }
 
-    else if(prev_alloc && !next_alloc){
-        char *NT = NEXT_BLKR(bp);
-        size_t NTS = GETSIZE(HDRP(NT));
-
-        UL(NT, heap_listp + (find_IDX(NTS)*WSIZE));
-        size += NTS;
-
-        PUT(HDRP(bp), PACK(size, 0));
-
-        //헤더값이 최신화 됐으니, 블록 사이즈가 이미 증가된 상태 = FTRP로 점프 뛸 떄 최신화 된 값으로 점프
-        PUT(FTRP(bp), PACK(size, 0));
-
-        
-        
-    }
-
-    else if(!prev_alloc && next_alloc){
-        char *PR = PREV_BLKR(bp);
-        size_t PRS = GETSIZE(HDRP(PR));
-        UL(PR, heap_listp + (find_IDX(PRS)*WSIZE));
-
-
-        size += PRS;
-        
-        PUT(FTRP(bp), PACK(size,0));
-        PUT(HDRP(PR), PACK(size,0));
-        bp = PR;
-       
-    }
+    bp = coalesce(bp);
     
-    else{
-        char *NT = NEXT_BLKR(bp);
-        char *PR = PREV_BLKR(bp);
-        size_t PRS = GETSIZE(HDRP(PR));
-        size_t NTS = GETSIZE(HDRP(NT));
-        UL(NT, heap_listp + (find_IDX(NTS)*WSIZE));
-        UL(PR, heap_listp + (find_IDX(PRS)*WSIZE));
-        
-        size += PRS + NTS;
-
-        PUT(FTRP(NT), PACK(size,0));
-        PUT(HDRP(PR), PACK(size,0));
-        
-        bp = PR;
-    }
-
-    AL(bp);
+    
     return bp;
 }
 
+
+// static void *coalesce(void *bp){
+//     size_t size = GETSIZE(HDRP(bp));
+//     //29가 나온 근거 : unsigned int * bit수 - 1 -3(한 블록당 8바이트니까, 최소 크기 세팅)
+//     //__builtin_clz 앞에 있는 공백 비트 개수
+//     //ex : 8 -> 29 - (0000 0000 0000 0000 00000 0000 0000 0) 100 -> 31- 29 = 3
+//     //__builtin_ctz 뒤에 있는 공백 비트 개수수
+//     size_t checker = __builtin_ctz(size) - 3;
+//     void *buddy_bp = (void *) ((((unsigned int)(bp) - (unsigned int) heap_listp) ^ size) + (unsigned int) heap_listp);
+//     // //최초 시전 시에만 탈출되도록 설계한 코드인데 아마 없어도 될듯?
+//     // if (buddy_bp > mem_sbrk(0)){
+//     //     PUT(bp, *(buddy_list + checker)); //free 블록의 bp(푸터)에 다음 free 값 저장
+//     //     buddy_list[checker] =  bp; 
+//     //     return bp;
+//     // }
+//     if ((char *)buddy_bp >= (char *)mem_sbrk(0)) {
+//         PUT_PTR(bp, buddy_list[checker]);
+//         buddy_list[checker] = bp;
+//         return bp;
+//     }
+//     size_t buddy_alloc = GETALLOC(HDRP(buddy_bp));
+//     if(buddy_alloc){
+//         PUT_PTR(bp, buddy_list[checker]); //free 블록의 bp(푸터)에 다음 free 값 저장
+//         buddy_list[checker] =  bp; 
+//         return bp;
+//     }
+//     else{
+//         if (buddy_list[checker] == buddy_bp) {
+//             buddy_list[checker] = GET_PTR(buddy_bp);
+//         } else {
+//             void *prev = buddy_list[checker];
+//             while (prev && GET_PTR(prev) != buddy_bp) {
+//                 prev = GET_PTR(prev);
+//             }
+//             if (prev)
+//                 PUT_PTR(prev, GET_PTR(buddy_bp));
+//         }
+//         bp = (bp < buddy_bp) ? bp : buddy_bp;
+//         PUT(HDRP(bp), PACK(size * 2, 0));
+//         return coalesce(bp);
+//         }
+// }
+
+
+static void *coalesce(void *bp) {
+    size_t size = GETSIZE(HDRP(bp));
+    size_t checker = __builtin_ctz(size) - 3;
+
+    while (1) {
+        void *buddy_bp = (void *)((((unsigned int)bp - (unsigned int)heap_listp) ^ size) + (unsigned int)heap_listp);
+        
+        size_t buddy_size = GETSIZE(HDRP(buddy_bp));
+        size_t buddy_alloc = GETALLOC(HDRP(buddy_bp));
+
+        // buddy가 size가 같고 free여야 합칠 수 있다
+        if (buddy_alloc || buddy_size != size) {
+            break;
+        }
+
+        // free list에서 buddy 제거
+        if (buddy_list[checker] == buddy_bp) {
+            buddy_list[checker] = GET_PTR(buddy_bp);
+        } else {
+            void *prev = buddy_list[checker];
+            while (prev && GET_PTR(prev) != buddy_bp) {
+                prev = GET_PTR(prev);
+            }
+            if (prev) {
+                PUT_PTR(prev, GET_PTR(buddy_bp));
+            }
+        }
+
+        // 작은 주소 기준
+        bp = (bp < buddy_bp) ? bp : buddy_bp;
+
+        size *= 2;
+        checker++;
+
+        PUT(HDRP(bp), PACK(size, 0));
+    }
+
+
+    PUT_PTR(bp, buddy_list[checker]);
+    buddy_list[checker] = bp;
+
+    return bp;
+}
 
 
 
@@ -245,193 +270,138 @@ static void *coalesce(void *bp){
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
  */
-void *mm_malloc(size_t size)
+void *mm_malloc(size_t asize)
 {
-    size_t asize;
-    size_t extendsize;
-    char *bp;
+    void *bp;
 
-    if(size == 0) 
+    if (asize == 0) 
         return NULL;
 
+    if (asize <= WSIZE)
+        asize = DSIZE;
+    else{
+        asize += WSIZE;
+        asize--;
+        asize |= asize >> 1;
+        asize |= asize >> 2;
+        asize |= asize >> 4;
+        asize |= asize >> 8;
+        asize |= asize >> 16;
+        asize += 1;
+    }
 
-    if(size <= DSIZE)
-        asize = 2*DSIZE;
-    else
-        asize = ALIGN(size + DSIZE);
-
-
-
-    //find fit 으로 맞는 블록을 찾았을 때
-    if((bp = find_fit(asize)) != NULL){
-        place(bp,asize);
+    if ((bp = find_fit(asize)) != NULL) {
+        place(bp, asize);
         return bp;
     }
 
-
-    //못 찾았을 때
-    extendsize = MAX(asize, CHUNKSIZE);
-    if((bp = extend_heap(extendsize/WSIZE)) == NULL)   
-        return NULL;
-    place(bp,asize);
-    return bp;
+    if(asize > CHUNKSIZE){
+        for(int Q = __builtin_ctz(asize) - __builtin_ctz(CHUNKSIZE); Q <= __builtin_ctz(asize); Q++){
+            if((bp = extend_heap(CHUNKSIZE / WSIZE)) == NULL)
+                return NULL;
+            CHUNKSIZE <<= 1;
+        }
+        place(bp,asize);
+        return bp;
+    }
+    
+    else{
+        if((bp = extend_heap(CHUNKSIZE / WSIZE)) == NULL)
+            return NULL;
+        CHUNKSIZE <<= 1;
+        place(bp, asize);
+        return bp;
+    }
+    
+    //원래 코드 펼치기기
+    // int newsize = ALIGN(size + SIZE_T_SIZE);
+    // void *p = mem_sbrk(newsize);
+    // if (p == (void *)-1)
+	// return NULL;
+    // else {
+    //     *(size_t *)p = size;
+    //     return (void *)((char *)p + SIZE_T_SIZE);
+    // }
 }
 
 
 
-
-//size대로 검색, 없으면 ++, 사이즈 조절을 여기서 해야하나? 
-static void *find_fit(size_t asize){
-    
-    int idx = find_IDX(asize);
-
-    char *List_CP = heap_listp + (idx * WSIZE);
-    char *bp;
-
-    //일단 따로 리미트 없이 while, 최적화 때 조절 필요요
-    while (idx <= 20)
-    {   
-        if((bp = GET_PTR(List_CP)) != NULL){
-
-            // 32kb까진 FF 설정, 최적화 때 조절 필요
-            if(idx <= 12){
-                // UL(bp, List_CP);
-                //FF
-                for(; bp != NULL; bp = GET_PTR(bp+WSIZE)){
-                    if(GETSIZE(HDRP(bp)) >= asize)
-                        return bp;
-                }
-            }
-
-            //32kb 이후부턴 BF 설정, 최적화 때 조절 필요요
-            else{
-                char *best_bp = NULL;
-                for(; bp != NULL; bp = GET_PTR(bp+WSIZE)){
-
-                    size_t cur = GETSIZE(HDRP(bp));
-                    
-                    if(cur == asize) 
-                        return bp;
-                    
-                    if(cur > asize){
-                        if(best_bp == NULL) 
-                            best_bp = bp;
-                        
-                        else{
-                            if(cur < GETSIZE(HDRP(bp)))
-                                best_bp = bp;
-                        }
-
-                    }
-                }
-
-                // UL(best_bp, List_CP);
-                if(best_bp != NULL) return best_bp;
-            }
+static void *find_fit(size_t asize) {
+    for (size_t checker = __builtin_ctz(asize) - 3; checker <= Mindex; checker++) {
+        if (buddy_list[checker] != NULL) {
+            // void *bp = buddy_list[checker];
+            // buddy_list[checker] = GET_PTR(bp); // next free
+            return buddy_list[checker];
         }
-
-        idx++;
-        List_CP += WSIZE;
     }
-    
     return NULL;
 }
 
-//GET PTR할떄마다 메모리 읽는 거니까 지역 변수로 저장해둬서 최소로 줄여야함
-static void UL(char *bp, char *SP){
-    
-    char *prv = GET_PTR(bp);          
-    char *suc = GET_PTR(bp + WSIZE);   
-
-    if(prv == SP) 
-        PUT_PTR(SP, suc);
-    else 
-        PUT_PTR(prv + WSIZE, suc);      
-
-    if (suc)
-        PUT_PTR(suc, prv);           
-
-    return;
-}
-
-static void AL(char *bp){
-    char *list_P = heap_listp + (find_IDX(GETSIZE(HDRP(bp))) * WSIZE);
-    char *old = GET_PTR(list_P);  
-
-    PUT_PTR(bp,list_P);
-    PUT_PTR(bp + WSIZE, old);
-    if(old){
-        PUT_PTR(old, bp);
-    }
-    PUT_PTR(list_P,bp);
-    return;
-}
-
-
-//size 바이트로 넘겨줘야됨 not DW 
-static int find_IDX(size_t size){
-    size --;
-
-
-    int L2 = (int)(8 * sizeof(size) - __builtin_clz(size) -3);
-    //원래 사이즈가 16KB 이하일 시
-    if(L2 <= 11){
-        return L2 ;
-    }
-
-    // 8kb의 배수로 줄이기 + 8kb만큼 뺴서 기준점 세팅
-    int w = (size >> 13)-1;
-
-    
-    //일단 머리 쥐어짜서 만들긴 했음 잠꺠면 다시 좀 봐줘라
-    //16KB~64KB : 8KB씩 건너뛰기
-    if (w <= 5)      
-        return 11 + w;
-
-    //64KB~96KB : 16KB씩 건너뛰기
-    if ((w >>= 1) <= 5)
-        return 13 + w;
-    
-    //128KB 이상
-    if (w > 7)    
-        return 20;
-
-    //96~128KB
-    return 19; 
-
-
-
-}
-
-
-
-
-
-
-
-
-
+// static void *find_fit(size_t asize) {
+//     for (size_t checker = __builtin_ctz(asize) - 3; checker < BL_LIMIT; checker++) {
+//         void *bp = buddy_list[checker];
+//         while (bp) {
+//             size_t block_size = GETSIZE(HDRP(bp));
+//             size_t alloc = GETALLOC(HDRP(bp));
+//             if (!alloc && block_size >= asize) {
+//                 return bp;
+//             }
+//             bp = GET_PTR(bp);
+//         }
+//     }
+//     return NULL;
+// }
 
 static void place(void *bp, size_t asize){
-    size_t checker = GETSIZE(HDRP(bp));
-    char *check = heap_listp + (find_IDX(checker) * WSIZE);
-    
-    UL(bp, check);
-    // 1블럭 이상의 free 블록이 나올 수 있는지 체크(헤더 4바, 푸터 4바, 본블럭 8바)
-    if((checker-asize) >= (2*DSIZE)){
+    size_t block_size = GETSIZE(HDRP(bp));
+    size_t bp_index = __builtin_ctz(block_size) - 3;
+    size_t target_index = __builtin_ctz(asize) - 3;
+
+    // free list에서 bp 제거
+    if (buddy_list[bp_index] == bp) {
+        buddy_list[bp_index] = GET_PTR(bp);
+    } else {
+        void *prev = buddy_list[bp_index];
+        while (prev && GET_PTR(prev) != bp) {
+            prev = GET_PTR(prev);
+        }
+        if (prev)
+            PUT_PTR(prev, GET_PTR(bp));
+    }
+
+    while (bp_index > target_index) {
+        bp_index--;
+        block_size >>= 1;
+
+        void *new_buddy = (char *)bp + block_size;
+        PUT(HDRP(new_buddy), PACK(block_size, 0));
+        PUT_PTR(new_buddy, buddy_list[bp_index]);
+        buddy_list[bp_index] = new_buddy;
+    }
+
+    PUT(HDRP(bp), PACK(block_size, 1));
+    PUT_PTR(bp, NULL);
+
+// static void place(void *bp, size_t asize){
+//     size_t checker = GETSIZE(HDRP(bp));
+
+//     // 1블럭 이상의 free 블록이 나올 수 있는지 체크(헤더 4바, 푸터 4바, 본블럭 8바)
+//     if((checker-asize) >= (2*DSIZE)){
         
-        PUT(HDRP(bp), PACK(asize, 1));
-        PUT(FTRP(bp), PACK(asize, 1));    
-        bp = NEXT_BLKR(bp);
-        PUT(HDRP(bp), PACK(checker-asize,0));
-        PUT(FTRP(bp), PACK(checker-asize,0));
-        AL(bp);
-    }
-    else{
-        PUT(HDRP(bp), PACK(checker, 1));
-        PUT(FTRP(bp), PACK(checker, 1));
-    }
+//         PUT(HDRP(bp), PACK(asize, 1));
+//         PUT(FTRP(bp), PACK(asize, 1));
+//         bp = NEXT_BLKR(bp);
+//         PUT(HDRP(bp), PACK(checker-asize,0));
+//         PUT(FTRP(bp), PACK(checker-asize,0));
+//     }
+//     else{
+//         PUT(HDRP(bp), PACK(checker, 1));
+//         PUT(FTRP(bp), PACK(checker, 1));
+//     }
     
+
+// }
+
 
 }
 
@@ -447,8 +417,6 @@ void mm_free(void *ptr)
 {
     size_t size = GETSIZE(HDRP(ptr));
     PUT(HDRP(ptr), PACK(size, 0));
-    PUT(FTRP(ptr), PACK(size, 0));
-
     coalesce(ptr);
 }
 
@@ -458,88 +426,19 @@ void mm_free(void *ptr)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
+    void *oldptr = ptr;
+    void *newptr;
+    size_t copySize;
 
-    if (ptr == NULL) {
-        return mm_malloc(size);
-    }
-   
-    if (size == 0) {
-        mm_free(ptr);
-        return NULL;
-    }
-
-  
-    size_t asize;
-    if (size <= DSIZE)                     
-        asize = 2 * DSIZE;
-    else                                   
-        asize = ALIGN(size + (DSIZE));
-
-
-   
-    size_t csize   = GETSIZE(HDRP(ptr));   
-   
-   
-    if (asize <= csize) {
-        return ptr;
-    }
-
-    char *NT = NEXT_BLKR(ptr);        
-    char *PR = PREV_BLKR(ptr);
-    size_t prev_alloc = GETALLOC(FTRP(PREV_BLKR(ptr)));
-    size_t next_alloc = GETALLOC(HDRP(NEXT_BLKR(ptr)));
-    size_t NTS = GETSIZE(HDRP(NT));
-    size_t PRS = GETSIZE(HDRP(PR));
-
-    if(prev_alloc && !next_alloc && csize + NTS >= asize){
-        
-
-        UL(NT, heap_listp + (find_IDX(NTS)*WSIZE));
-        csize += NTS;
-
-        PUT(HDRP(ptr), PACK(csize, 1));
-        PUT(FTRP(ptr), PACK(csize, 1));
-
-        return ptr;
-    }
-
-    else if(!prev_alloc && next_alloc && csize + PRS >= asize){
-
-        UL(PR, heap_listp + (find_IDX(PRS)*WSIZE));
-
-        csize += PRS;
-
-        PUT(FTRP(ptr), PACK(csize,1));
-        PUT(HDRP(PR), PACK(csize,1));
-        memmove(PR, ptr, csize - DSIZE);
-        
-        return PR;
-    }
     
-    else if(!prev_alloc && !next_alloc && csize + + NTS + PRS >= asize){
-
-        UL(NT, heap_listp + (find_IDX(NTS)*WSIZE));
-        UL(PR, heap_listp + (find_IDX(PRS)*WSIZE));
-        
-        csize += PRS + NTS;
-
-        PUT(FTRP(NT), PACK(csize,1));
-        PUT(HDRP(PR), PACK(csize,1));
-        memmove(PR, ptr, csize - DSIZE);
-        return PR;
-    }
-    
-  
-    void *newptr = mm_malloc(size);
+    newptr = mm_malloc(size);
     if (newptr == NULL)
-        return NULL;
-
- 
-    size_t copySize = csize - DSIZE;        
+      return NULL;
+    copySize = GETSIZE(HDRP(oldptr));
     if (size < copySize)
-        copySize = size;
-    memcpy(newptr, ptr, copySize); 
-    
-    mm_free(ptr); 
+      copySize = size;
+    memcpy(newptr, oldptr, copySize);
+    mm_free(oldptr);
     return newptr;
 }
+
